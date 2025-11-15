@@ -109,24 +109,7 @@ def getdomains(arg, headergen):
 
 
 def find_domain_id(domain_name, headergen):
-    try:
-        html = requests.get(
-            f"https://freedns.afraid.org/domain/registry/?page=1&q={domain_name}",
-            headers=headergen(),
-        )
-        if html.status_code != 200 or not html.text:
-            log(f"[!] Blocked or failed to fetch domain ID for {domain_name}")
-            return None
-        html = html.text
-        print(html)
-        pattern = r"<a href=\/subdomain\/edit\.php\?edit_domain_id=([0-9]{6})<\/a>"
-        matches = re.findall(pattern, html)
-        if matches:
-            return matches[0]
-        log(f"[!] Domain ID not found for {domain_name}")
-    except Exception as e:
-        log(f"[!] Error fetching domain ID for {domain_name}: {e}")
-    return None
+    return client.get_registry(query=domain_name)["domains"][0]["id"]
 
 
 # -----------------------------
@@ -336,7 +319,9 @@ non_random_domain_id = None
 
 
 def finddomains(pagearg, headergen):
+    print(pagearg)
     for page in pagearg.split(","):
+        print(page)
         getdomains(page, headergen)
 
 
