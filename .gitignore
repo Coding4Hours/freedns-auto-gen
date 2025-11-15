@@ -1,0 +1,6 @@
+dist/
+build/
+domain92/__pycache__/
+.vscode/
+logs/
+domainlist.txt
