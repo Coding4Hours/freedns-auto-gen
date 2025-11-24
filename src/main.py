@@ -17,7 +17,6 @@ import temp_mails
 class Args:
     number = 10
     ip = "129.153.136.235"  # Always use this IP
-    webhook = "https://discord.com/api/webhooks/1439083402937503908/D2lcCIfB-7qGk3DAMiEp5m6A8Kin_7n2eICOvo_yH_-uDYbVcO8QUhur7bPu9C-jVfvD"
     proxy = None
     use_tor = True
     silent = False  # logs enabled
