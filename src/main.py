@@ -5,12 +5,23 @@ import requests
 import re
 import random
 import string
-import freedns
 import sys
+import lxml.html
 import pytesseract
 import os
 import platform
 import temp_mails
+from browserforge.headers import HeaderGenerator
+
+header_generator = HeaderGenerator()
+
+headers = header_generator.generate()
+
+headers["Host"] = "freedns.afraid.org"
+
+headers["Upgrade-Insecure-Requests"] = "1"
+
+print(headers)
 
 
 # Configuration
@@ -18,7 +29,7 @@ class Args:
     number = 10
     ip = "129.153.136.235"  # Always use this IP
     proxy = None
-    use_tor = True
+    use_tor = False
     silent = False  # logs enabled
     outfile = "domainlist.txt"
     type = "A"
@@ -26,12 +37,11 @@ class Args:
     subdomains = "random"
     auto = True
     domain_type = None
+    webhook = ""
     single_tld = None
 
 
 args = Args()
-
-client = freedns.Client()
 
 
 if platform.system() != "Linux":
@@ -51,14 +61,125 @@ domainnames = []
 # -----------------------------
 # Logging
 # -----------------------------
+
+session = requests.Session()
+session.headers.update(headers)
+
+
 def log(msg):
     if not args.silent:
         print(msg)
 
 
+def get_captcha():
+    captcha_url = "https://freedns.afraid.org/securimage/securimage_show.php"
+    response = session.get(captcha_url, headers=headers)
+    return response.content
+
+
+def create_account(captcha_code, firstname, lastname, username, password, email):
+    session = requests.Session()
+    session.headers.update(headers)
+
+    account_create_url = "https://freedns.afraid.org/signup/?step=2"
+    payload = {
+        "plan": "starter",
+        "firstname": firstname,
+        "lastname": lastname,
+        "username": username,
+        "password": password,
+        "password2": password,
+        "email": email,
+        "captcha_code": captcha_code,
+        "tos": "1",
+        "PROCID": "",
+        "TRANSPRE": "",
+        "action": "signup",
+        "send": "Send+activation+email",
+    }
+
+    response = session.post(account_create_url, data=payload, allow_redirects=False)
+    if response.status_code == 302:
+        return
+
+    # if we are not redirected, the signup has failed
+    document = lxml.html.fromstring(response.text)
+    signup_table = document.cssselect('table[width="420"]')[0]
+    error_elements = signup_table.cssselect("b")
+
+    error_messages = []
+    for element in error_elements:
+        error_messages.append("- " + element.text_content().strip())
+    errors = "\n".join(error_messages)
+
+    raise RuntimeError(
+        "Failed to initiate account creation. FreeDNS returned the following errors:\n"
+        + errors
+    )
+
+
+def activate_account(activation_code):
+    activate_url = f"https://freedns.afraid.org/signup/activate.php?{activation_code}"
+
+    response = session.get(activate_url, allow_redirects=False)
+    if response.status_code != 302:
+        error_message = detect_error(response.text)
+        raise RuntimeError("Account activation failed. Error: " + error_message)
+
+
+def login(username, password):
+    session = requests.Session()
+    session.headers.update(headers)
+    login_url = "https://freedns.afraid.org/zc.php?step=2"
+    payload = {
+        "username": username,
+        "password": password,
+        "remember": "1",
+        "submit": "Login",
+        "remote": "",
+        "from": "",
+        "action": "auth",
+    }
+
+    response = session.post(login_url, data=payload, allow_redirects=False)
+    if response.status_code != 302:
+        error_message = detect_error(response.text)
+        raise RuntimeError("Login failed. Error: " + error_message)
+
+
+def detect_error(self, html):
+    document = lxml.html.fromstring(html)
+
+    table = document.cssselect('table[width="95%"]')[0]
+    cell = table.cssselect('td[bgcolor="#eeeeee"]')[0]
+    error_message = cell.text_content()
+    return error_message.strip()
+
+
+def create_subdomain(captcha_code, record_type, subdomain, domain_id, destination):
+    create_subdomain_url = "https://freedns.afraid.org/subdomain/save.php?step=2"
+    payload = {
+        "type": record_type,
+        "subdomain": subdomain,
+        "domain_id": domain_id,
+        "address": destination,
+        "ttlalias": "For+our+premium+supporters",
+        "captcha_code": captcha_code,
+        "ref": "",
+        "send": "Save!",
+    }
+
+    response = session.post(create_subdomain_url, data=payload, allow_redirects=False)
+    if response.status_code != 302:
+        error_message = detect_error(response.text)
+        raise RuntimeError("Failed to create subdomain. Error: " + error_message)
+
+
 # -----------------------------
 # Page parsing
 # -----------------------------
+
+
 def getpagelist(arg):
     arg = arg.strip()
     if not arg:
@@ -83,17 +204,19 @@ def getpagelist(arg):
     return sorted(set(pagelist))
 
 
-def getdomains(arg, headergen):
+def getdomains(arg):
     global domainlist, domainnames
     for sp in getpagelist(arg):
         try:
             html = requests.get(
                 f"https://freedns.afraid.org/domain/registry/?page={sp}&sort=2&q=",
-                headers=headergen(),
+                headers=header_generator.generate(),
             )
             if html.status_code != 200 or not html.text:
                 log(
-                    f"[!] Blocked or failed to fetch page {sp} (HTTP {html.status_code})"
+                    f"[!] Blocked or failed to fetch page {sp} (HTTP {
+                        html.status_code
+                    })"
                 )
                 continue
             html = html.text
@@ -110,11 +233,11 @@ def getdomains(arg, headergen):
             log(f"[!] Error fetching page {sp}: {e}")
 
 
-def find_domain_id(domain_name, headergen):
+def find_domain_id(domain_name):
     try:
         html = requests.get(
             f"https://freedns.afraid.org/domain/registry/?page=1&q={domain_name}",
-            headers=headergen(),
+            headers=header_generator.generate(),
         )
         if html.status_code != 200 or not html.text:
             log(f"[!] Blocked or failed to fetch domain ID for {domain_name}")
@@ -134,7 +257,7 @@ def find_domain_id(domain_name, headergen):
 # Captcha
 # -----------------------------
 def getcaptcha():
-    return Image.open(BytesIO(client.get_captcha()))
+    return Image.open(BytesIO(get_captcha()))
 
 
 def denoise(img):
@@ -177,14 +300,14 @@ def generate_random_string(length):
 # -----------------------------
 # Login & account creation
 # -----------------------------
-def login(headergen):
+def loginn():
     while True:
         try:
             capcha = solve(getcaptcha()) if args.auto else input("Captcha: ")
             mail = temp_mails.Generator_email()
             email = mail.email
             username = generate_random_string(random.randint(8, 13))
-            client.create_account(
+            create_account(
                 capcha,
                 generate_random_string(13),
                 generate_random_string(13),
@@ -196,8 +319,8 @@ def login(headergen):
             content = str(mail.get_mail_content(mail_id=text["id"]))
             match = re.search(r'\?([^">]+)"', content)
             if match:
-                client.activate_account(match.group(1))
-                client.login(email, "alphabet11")
+                activate_account(match.group(1))
+                login(email, "alphabet11")
                 log(f"[+] Account logged in: {email}")
         except KeyboardInterrupt:
             sys.exit()
@@ -234,8 +357,8 @@ def send_discord_notification(webhook_url, domain_url):
         return
     try:
         data = {
-            "username": "Bromine Link Gen",  # <- correct
-            "avatar_url": "https://avatars.githubusercontent.com/u/214591804?s=200&v=4",  # <- correct
+            "username": "Bromine Link Gen",
+            "avatar_url": "https://avatars.githubusercontent.com/u/214591804?s=200&v=4",
             "content": f"New domain created: {domain_url}",
         }
         response = requests.post(webhook_url, json=data)
@@ -248,7 +371,7 @@ def send_discord_notification(webhook_url, domain_url):
 # -----------------------------
 # Domain creation (modified)
 # -----------------------------
-def createdomain(headergen):
+def createdomain():
     while True:
         try:
             capcha = solve(getcaptcha()) if args.auto else input("Captcha: ")
@@ -259,9 +382,7 @@ def createdomain(headergen):
                 else random.choice(args.subdomains.split(","))
             )
 
-            client.create_subdomain(
-                capcha, args.type, subdomainy, random_domain_id, args.ip
-            )
+            create_subdomain(capcha, args.type, subdomainy, random_domain_id, args.ip)
 
             tld = domainnames[domainlist.index(random_domain_id)]
             domain_url = f"http://{subdomainy}.{tld}"
@@ -283,7 +404,7 @@ def createdomain(headergen):
             break
 
 
-def createlinks(number, headergen):
+def createlinks(number):
     for i in range(number):
         if i % 5 == 0 and args.use_tor:
             from stem import Signal
@@ -293,8 +414,8 @@ def createlinks(number, headergen):
                 controller.authenticate()
                 controller.signal(Signal.NEWNYM)
                 time.sleep(controller.get_newnym_wait())
-            login(headergen())
-        createdomain(headergen())
+            loginn()
+        createdomain()
 
 
 # -----------------------------
@@ -303,24 +424,22 @@ def createlinks(number, headergen):
 non_random_domain_id = None
 
 
-def finddomains(pagearg, headergen):
+def finddomains(pagearg):
     for page in pagearg.split(","):
-        getdomains(page, headergen)
+        getdomains(page)
 
 
 def init():
     global non_random_domain_id
-    import random_header_generator
 
-    headergen = random_header_generator.HeaderGenerator()  # dict, not callable
     if args.single_tld:
-        non_random_domain_id = find_domain_id(args.single_tld, headergen)
+        non_random_domain_id = find_domain_id(args.single_tld)
         if not non_random_domain_id:
             log("[!] Could not find single domain ID, exiting.")
             sys.exit(1)
     else:
-        finddomains(args.pages, headergen)
-    createlinks(args.number, headergen)
+        finddomains(args.pages)
+    createlinks(args.number)
 
 
 if __name__ == "__main__":
