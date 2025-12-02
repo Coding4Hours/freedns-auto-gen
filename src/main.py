@@ -4,7 +4,6 @@ import time
 import requests
 import re
 import random
-import string
 import sys
 import lxml.html
 import pytesseract
@@ -14,14 +13,10 @@ import temp_mails
 from browserforge.headers import HeaderGenerator
 
 header_generator = HeaderGenerator()
-
 headers = header_generator.generate()
 
 headers["Host"] = "freedns.afraid.org"
-
 headers["Upgrade-Insecure-Requests"] = "1"
-
-print(headers)
 
 
 # Configuration
@@ -29,7 +24,7 @@ class Args:
     number = 10
     ip = "129.153.136.235"  # Always use this IP
     proxy = None
-    use_tor = False
+    use_tor = True
     silent = False  # logs enabled
     outfile = "domainlist.txt"
     type = "A"
@@ -42,6 +37,11 @@ class Args:
 
 
 args = Args()
+
+
+# Load a wordlist once at the start
+with open("words.txt", "r") as f:
+    WORDLIST = [line.strip().lower() for line in f if line.strip()]
 
 
 if platform.system() != "Linux":
@@ -78,9 +78,6 @@ def get_captcha():
 
 
 def create_account(captcha_code, firstname, lastname, username, password, email):
-    session = requests.Session()
-    session.headers.update(headers)
-
     account_create_url = "https://freedns.afraid.org/signup/?step=2"
     payload = {
         "plan": "starter",
@@ -293,24 +290,27 @@ def solve(image):
         return solve(getcaptcha())
 
 
-def generate_random_string(length):
-    return "".join(random.choice(string.ascii_lowercase) for _ in range(length))
+def generate_random_string():
+    return random.choice(WORDLIST)
 
 
 # -----------------------------
 # Login & account creation
 # -----------------------------
+
+
 def loginn():
     while True:
         try:
             capcha = solve(getcaptcha()) if args.auto else input("Captcha: ")
             mail = temp_mails.Generator_email()
             email = mail.email
-            username = generate_random_string(random.randint(8, 13))
+            username = generate_random_string()
+            print(username)
             create_account(
                 capcha,
-                generate_random_string(13),
-                generate_random_string(13),
+                generate_random_string(),
+                generate_random_string(),
                 username,
                 "alphabet11",
                 email,
@@ -346,10 +346,6 @@ def loginn():
 # -----------------------------
 # Domain creation
 # -----------------------------
-
-# Load a wordlist once at the start
-with open("words.txt", "r") as f:
-    WORDLIST = [line.strip().lower() for line in f if line.strip()]
 
 
 def send_discord_notification(webhook_url, domain_url):

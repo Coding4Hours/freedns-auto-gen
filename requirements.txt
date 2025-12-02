@@ -1,4 +1,5 @@
 # Core dependencies
+websocket-client
 browserforge
 pillow==11.1.0
 requests==2.32.4
