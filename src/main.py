@@ -21,7 +21,7 @@ headers["Upgrade-Insecure-Requests"] = "1"
 
 # Configuration
 class Args:
-    number = 10
+    number = 1
     ip = "129.153.136.235"  # Always use this IP
     proxy = None
     use_tor = True
@@ -305,7 +305,9 @@ def loginn():
             capcha = solve(getcaptcha()) if args.auto else input("Captcha: ")
             mail = temp_mails.Generator_email()
             email = mail.email
-            username = generate_random_string()
+            username = f"{generate_random_string()}{generate_random_string()}{
+                ''.join(str(random.randint(1, 9)) for _ in range(3))
+            }"
             print(username)
             create_account(
                 capcha,

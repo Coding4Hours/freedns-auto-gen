@@ -1,4 +1,6 @@
 # Core dependencies
+cssselect
+bs4
 websocket-client
 browserforge
 pillow==11.1.0
