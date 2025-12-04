@@ -10,18 +10,12 @@ import pytesseract
 import os
 import platform
 import temp_mails
-from browserforge.headers import HeaderGenerator
-
-header_generator = HeaderGenerator()
-headers = header_generator.generate()
-
-headers["Host"] = "freedns.afraid.org"
-headers["Upgrade-Insecure-Requests"] = "1"
+from selenium import webdriver
+from selenium.webdriver.common.by import By
 
 
-# Configuration
 class Args:
-    number = 1
+    number = 5
     ip = "129.153.136.235"  # Always use this IP
     proxy = None
     use_tor = True
@@ -62,9 +56,6 @@ domainnames = []
 # Logging
 # -----------------------------
 
-session = requests.Session()
-session.headers.update(headers)
-
 
 def log(msg):
     if not args.silent:
@@ -73,60 +64,46 @@ def log(msg):
 
 def get_captcha():
     captcha_url = "https://freedns.afraid.org/securimage/securimage_show.php"
-    response = session.get(captcha_url, headers=headers)
+    response = requests.get(captcha_url)
     return response.content
 
 
-def create_account(captcha_code, firstname, lastname, username, password, email):
-    account_create_url = "https://freedns.afraid.org/signup/?step=2"
-    payload = {
-        "plan": "starter",
-        "firstname": firstname,
-        "lastname": lastname,
-        "username": username,
-        "password": password,
-        "password2": password,
-        "email": email,
-        "captcha_code": captcha_code,
-        "tos": "1",
-        "PROCID": "",
-        "TRANSPRE": "",
-        "action": "signup",
-        "send": "Send+activation+email",
-    }
+def create_account(firstname, lastname, username, password, email):
+    driver = webdriver.Chrome()
+    driver.get("https://freedns.afraid.org/signup/?plan=starter")
 
-    response = session.post(account_create_url, data=payload, allow_redirects=False)
-    if response.status_code == 302:
-        return
+    driver.find_element(by=By.NAME, value="firstname").send_keys(firstname)
+    driver.find_element(by=By.NAME, value="lastname").send_keys(lastname)
+    driver.find_element(by=By.NAME, value="username").send_keys(username)
+    driver.find_element(by=By.NAME, value="password").send_keys(password)
+    driver.find_element(by=By.NAME, value="password2").send_keys(password)
+    driver.find_element(by=By.NAME, value="email").send_keys(email)
 
-    # if we are not redirected, the signup has failed
-    document = lxml.html.fromstring(response.text)
-    signup_table = document.cssselect('table[width="420"]')[0]
-    error_elements = signup_table.cssselect("b")
+    captcha_element = driver.find_element(By.ID, "captcha")
 
-    error_messages = []
-    for element in error_elements:
-        error_messages.append("- " + element.text_content().strip())
-    errors = "\n".join(error_messages)
+    image_content = captcha_element.screenshot_as_png
+    with open("captcha.png", "wb") as f:
+        f.write(image_content)
 
-    raise RuntimeError(
-        "Failed to initiate account creation. FreeDNS returned the following errors:\n"
-        + errors
-    )
+    image = Image.open(BytesIO(image_content))
+    captcha = solve(image)
+
+    driver.find_element(by=By.NAME, value="tos").click()
+    driver.find_element(by=By.NAME, value="captcha_code").send_keys(captcha)
+    # press activation email
+    driver.find_element(by=By.NAME, value="send").click()
 
 
 def activate_account(activation_code):
     activate_url = f"https://freedns.afraid.org/signup/activate.php?{activation_code}"
 
-    response = session.get(activate_url, allow_redirects=False)
+    response = requests.get(activate_url, allow_redirects=False)
     if response.status_code != 302:
         error_message = detect_error(response.text)
         raise RuntimeError("Account activation failed. Error: " + error_message)
 
 
 def login(username, password):
-    session = requests.Session()
-    session.headers.update(headers)
     login_url = "https://freedns.afraid.org/zc.php?step=2"
     payload = {
         "username": username,
@@ -138,7 +115,7 @@ def login(username, password):
         "action": "auth",
     }
 
-    response = session.post(login_url, data=payload, allow_redirects=False)
+    response = requests.post(login_url, data=payload, allow_redirects=False)
     if response.status_code != 302:
         error_message = detect_error(response.text)
         raise RuntimeError("Login failed. Error: " + error_message)
@@ -166,7 +143,7 @@ def create_subdomain(captcha_code, record_type, subdomain, domain_id, destinatio
         "send": "Save!",
     }
 
-    response = session.post(create_subdomain_url, data=payload, allow_redirects=False)
+    response = requests.post(create_subdomain_url, data=payload, allow_redirects=False)
     if response.status_code != 302:
         error_message = detect_error(response.text)
         raise RuntimeError("Failed to create subdomain. Error: " + error_message)
@@ -203,38 +180,49 @@ def getpagelist(arg):
 
 def getdomains(arg):
     global domainlist, domainnames
-    for sp in getpagelist(arg):
-        try:
-            html = requests.get(
-                f"https://freedns.afraid.org/domain/registry/?page={sp}&sort=2&q=",
-                headers=header_generator.generate(),
-            )
-            if html.status_code != 200 or not html.text:
-                log(
-                    f"[!] Blocked or failed to fetch page {sp} (HTTP {
-                        html.status_code
-                    })"
+    driver = webdriver.Chrome()
+
+    try:
+        for sp in getpagelist(arg):
+            try:
+                driver.get(
+                    f"https://freedns.afraid.org/domain/registry/?page={sp}&sort=2&q="
                 )
-                continue
-            html = html.text
-            if args.domain_type == "private":
-                pattern = r"<a href=\/subdomain\/edit\.php\?edit_domain_id=(\d+)>([\w.-]+)<\/a>(.+\..+)<td>private<\/td>"
-            elif args.domain_type == "public":
-                pattern = r"<a href=\/subdomain\/edit\.php\?edit_domain_id=(\d+)>([\w.-]+)<\/a>(.+\..+)<td>public<\/td>"
-            else:
-                pattern = r"<a href=\/subdomain\/edit\.php\?edit_domain_id=(\d+)>([\w.-]+)<\/a>(.+\..+)<td>(public|private)<\/td>"
-            matches = re.findall(pattern, html)
-            domainnames.extend([m[1] for m in matches])
-            domainlist.extend([m[0] for m in matches])
-        except Exception as e:
-            log(f"[!] Error fetching page {sp}: {e}")
+
+                html = driver.page_source
+                if not html:
+                    log(f"[!] Blocked or failed to fetch page {sp}")
+                    continue
+
+                pattern = r"edit_domain_id=(\d+)[^>]*>([\w.-]+)<\/a>(?:.*?)<td>(public|private)<\/td>"
+
+                matches = re.findall(pattern, html, re.DOTALL)
+
+                filtered_matches = []
+                for m in matches:
+                    dom_id, dom_name, dom_type = m
+
+                    if args.domain_type == "private" and dom_type == "private":
+                        filtered_matches.append((dom_id, dom_name))
+                    elif args.domain_type == "public" and dom_type == "public":
+                        filtered_matches.append((dom_id, dom_name))
+                    elif args.domain_type not in ["private", "public"]:  # "all"
+                        filtered_matches.append((dom_id, dom_name))
+
+                domainlist.extend([m[0] for m in filtered_matches])
+                domainnames.extend([m[1] for m in filtered_matches])
+
+            except Exception as e:
+                log(f"[!] Error fetching page {sp}: {e}")
+
+    finally:
+        driver.quit()
 
 
 def find_domain_id(domain_name):
     try:
         html = requests.get(
             f"https://freedns.afraid.org/domain/registry/?page=1&q={domain_name}",
-            headers=header_generator.generate(),
         )
         if html.status_code != 200 or not html.text:
             log(f"[!] Blocked or failed to fetch domain ID for {domain_name}")
@@ -302,7 +290,6 @@ def generate_random_string():
 def loginn():
     while True:
         try:
-            capcha = solve(getcaptcha()) if args.auto else input("Captcha: ")
             mail = temp_mails.Generator_email()
             email = mail.email
             username = f"{generate_random_string()}{generate_random_string()}{
@@ -310,7 +297,6 @@ def loginn():
             }"
             print(username)
             create_account(
-                capcha,
                 generate_random_string(),
                 generate_random_string(),
                 username,
