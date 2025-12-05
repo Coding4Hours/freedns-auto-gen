@@ -21,7 +21,6 @@ class Args:
     use_tor = True
     silent = False  # logs enabled
     outfile = "domainlist.txt"
-    type = "A"
     pages = "1-10"
     subdomains = "random"
     auto = True
@@ -47,6 +46,7 @@ filename = os.path.join(script_dir, "data", "tesseract-linux")
 os.environ["TESSDATA_PREFIX"] = os.path.join(script_dir, "data")
 pytesseract.pytesseract.tesseract_cmd = filename
 
+options = webdriver.ChromeOptions()
 
 domainlist = []
 domainnames = []
@@ -62,16 +62,11 @@ def log(msg):
         print(msg)
 
 
-def get_captcha():
-    captcha_url = "https://freedns.afraid.org/securimage/securimage_show.php"
-    response = requests.get(captcha_url)
-    return response.content
-
-
 def create_account(firstname, lastname, username, password, email):
-    driver = webdriver.Chrome()
+    driver = webdriver.Chrome(options=options)
     driver.get("https://freedns.afraid.org/signup/?plan=starter")
 
+    time.sleep(2)
     driver.find_element(by=By.NAME, value="firstname").send_keys(firstname)
     driver.find_element(by=By.NAME, value="lastname").send_keys(lastname)
     driver.find_element(by=By.NAME, value="username").send_keys(username)
@@ -121,7 +116,7 @@ def login(username, password):
         raise RuntimeError("Login failed. Error: " + error_message)
 
 
-def detect_error(self, html):
+def detect_error(html):
     document = lxml.html.fromstring(html)
 
     table = document.cssselect('table[width="95%"]')[0]
@@ -130,23 +125,28 @@ def detect_error(self, html):
     return error_message.strip()
 
 
-def create_subdomain(captcha_code, record_type, subdomain, domain_id, destination):
-    create_subdomain_url = "https://freedns.afraid.org/subdomain/save.php?step=2"
-    payload = {
-        "type": record_type,
-        "subdomain": subdomain,
-        "domain_id": domain_id,
-        "address": destination,
-        "ttlalias": "For+our+premium+supporters",
-        "captcha_code": captcha_code,
-        "ref": "",
-        "send": "Save!",
-    }
+def create_subdomain(subdomain, domain_id, destination):
+    driver = webdriver.Chrome(options=options)
+    driver.get(
+        f"https://freedns.afraid.org/subdomain/edit.php?edit_domain_id={domain_id}"
+    )
 
-    response = requests.post(create_subdomain_url, data=payload, allow_redirects=False)
-    if response.status_code != 302:
-        error_message = detect_error(response.text)
-        raise RuntimeError("Failed to create subdomain. Error: " + error_message)
+    driver.find_element(By.NAME, "subdomain").send_keys(subdomain)
+    driver.find_element(By.NAME, "address").clear().send_keys(destination)
+    captcha_element = driver.find_element(By.ID, "captcha")
+
+    image_content = captcha_element.screenshot_as_png
+    with open("captcha.png", "wb") as f:
+        f.write(image_content)
+
+    image = Image.open(BytesIO(image_content))
+    captcha = solve(image)
+
+    driver.find_element(by=By.NAME, value="captcha_code").send_keys(captcha)
+
+    # if response.status_code != 302:
+    # error_message = detect_error()
+    # raise RuntimeError("Failed to create subdomain. Error: " + error_message)
 
 
 # -----------------------------
@@ -178,9 +178,11 @@ def getpagelist(arg):
     return sorted(set(pagelist))
 
 
+# maybe will use
 def getdomains(arg):
     global domainlist, domainnames
-    driver = webdriver.Chrome()
+
+    driver = webdriver.Chrome(options=options)
 
     try:
         for sp in getpagelist(arg):
@@ -241,8 +243,6 @@ def find_domain_id(domain_name):
 # -----------------------------
 # Captcha
 # -----------------------------
-def getcaptcha():
-    return Image.open(BytesIO(get_captcha()))
 
 
 def denoise(img):
@@ -271,11 +271,11 @@ def solve(image):
         )
         if len(text) not in (4, 5):
             log("[!] Captcha does not match expected length, retrying...")
-            return solve(getcaptcha())
+            return solve(image)
         return text
     except Exception as e:
         log(f"[!] Captcha solving error: {e}")
-        return solve(getcaptcha())
+        return solve(image)
 
 
 def generate_random_string():
@@ -358,7 +358,6 @@ def send_discord_notification(webhook_url, domain_url):
 def createdomain():
     while True:
         try:
-            capcha = solve(getcaptcha()) if args.auto else input("Captcha: ")
             random_domain_id = random.choice(domainlist)
             subdomainy = (
                 random.choice(WORDLIST)
@@ -366,7 +365,7 @@ def createdomain():
                 else random.choice(args.subdomains.split(","))
             )
 
-            create_subdomain(capcha, args.type, subdomainy, random_domain_id, args.ip)
+            create_subdomain(subdomainy, random_domain_id, args.ip)
 
             tld = domainnames[domainlist.index(random_domain_id)]
             domain_url = f"http://{subdomainy}.{tld}"
@@ -391,13 +390,8 @@ def createdomain():
 def createlinks(number):
     for i in range(number):
         if i % 5 == 0 and args.use_tor:
-            from stem import Signal
-            from stem.control import Controller
+            options.add_argument("--proxy-server=socks5://72.195.34.42:4145")
 
-            with Controller.from_port(port=9051) as controller:
-                controller.authenticate()
-                controller.signal(Signal.NEWNYM)
-                time.sleep(controller.get_newnym_wait())
             loginn()
         createdomain()
 
