@@ -9,16 +9,15 @@ import { readFileSync } from "fs";
 
 const args = {
 	number: 5,
-	ip: "129.153.136.235", // Always use this IP
+	ip: "129.153.136.235",
 	// proxy: null,
 	// proxy: "socks5://127.0.0.1:9050",
 	proxy: "socks4://98.182.147.97:4145",
-	silent: false, // logs enabled
 	outfile: "domainlist.txt",
 	pages: "1-10",
-	auto: true,
 	domain_type: null,
 	webhook: "",
+	auto: true,
 };
 
 puppeteer.use(StealthPlugin());
