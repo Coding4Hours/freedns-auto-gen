@@ -37,7 +37,7 @@ const browser = await puppeteer.launch({
 			? [`--proxy-server=${args.proxy || random_proxy}`]
 			: []),
 	],
-	headless: false,
+	headless: true,
 });
 
 const domainlist: string[] = [];
